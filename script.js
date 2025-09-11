@@ -264,6 +264,127 @@ window.addEventListener('scroll', () => {
     }
 });
 
+// Cookie management functions
+const CookieManager = {
+    // Set a cookie with expiration
+    set: function(name, value, days = 0) {
+        let expires = "";
+        if (days) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + (value || "") + expires + "; path=/; SameSite=Strict";
+    },
+    
+    // Get a cookie value
+    get: function(name) {
+        const nameEQ = name + "=";
+        const ca = document.cookie.split(';');
+        for(let i = 0; i < ca.length; i++) {
+            let c = ca[i];
+            while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+            if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+        }
+        return null;
+    },
+    
+    // Delete a specific cookie
+    delete: function(name) {
+        document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; SameSite=Strict";
+    },
+    
+    // Delete all cookies
+    deleteAll: function() {
+        const cookies = document.cookie.split(";");
+        
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i];
+            const eqPos = cookie.indexOf("=");
+            const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
+            
+            if (name) {
+                // Delete cookie for current path
+                document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; SameSite=Strict";
+                // Delete cookie for root path
+                document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; SameSite=Strict";
+                // Delete cookie for current domain
+                document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; domain=" + window.location.hostname + "; SameSite=Strict";
+                // Delete cookie for parent domain (if subdomain)
+                const hostParts = window.location.hostname.split('.');
+                if (hostParts.length > 2) {
+                    const parentDomain = '.' + hostParts.slice(-2).join('.');
+                    document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/; domain=" + parentDomain + "; SameSite=Strict";
+                }
+            }
+        }
+        
+        // Also try to clear localStorage and sessionStorage for complete cleanup
+        try {
+            localStorage.clear();
+            sessionStorage.clear();
+        } catch (e) {
+            console.log('Storage clearing not available or restricted');
+        }
+        
+        console.log('All cookies and storage cleared');
+    }
+};
+
+// Auto-delete cookies when tab is closed
+function setupCookieAutoDelete() {
+    // Set session cookies that will be deleted when browser closes
+    CookieManager.set('mtb_session_active', 'true'); // Session cookie (no expiration)
+    
+    // Handle page unload (tab close, navigation away, browser close)
+    window.addEventListener('beforeunload', function(event) {
+        // Delete all cookies when tab is being closed
+        CookieManager.deleteAll();
+        
+        // Optional: Show confirmation dialog (some browsers may ignore this)
+        const message = 'Your session data will be cleared. Are you sure you want to leave?';
+        event.returnValue = message;
+        return message;
+    });
+    
+    // Handle page visibility change (when tab becomes hidden)
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') {
+            // Store timestamp when tab becomes hidden
+            CookieManager.set('mtb_tab_hidden_time', Date.now().toString());
+        } else if (document.visibilityState === 'visible') {
+            // Check if tab was hidden for more than 30 minutes, then clear cookies
+            const hiddenTime = CookieManager.get('mtb_tab_hidden_time');
+            if (hiddenTime) {
+                const timeDiff = Date.now() - parseInt(hiddenTime);
+                const thirtyMinutes = 30 * 60 * 1000; // 30 minutes in milliseconds
+                
+                if (timeDiff > thirtyMinutes) {
+                    CookieManager.deleteAll();
+                    showNotification('Session expired due to inactivity. Cookies have been cleared.', 'info');
+                }
+            }
+        }
+    });
+    
+    // Handle page focus events
+    window.addEventListener('focus', function() {
+        // Check if session is still valid when user returns to tab
+        const sessionActive = CookieManager.get('mtb_session_active');
+        if (!sessionActive) {
+            showNotification('Welcome back! Starting a fresh session.', 'info');
+            CookieManager.set('mtb_session_active', 'true');
+        }
+    });
+    
+    // Periodic cleanup - check every 5 minutes if page is still active
+    setInterval(function() {
+        if (document.visibilityState === 'visible') {
+            CookieManager.set('mtb_last_activity', Date.now().toString());
+        }
+    }, 5 * 60 * 1000); // 5 minutes
+}
+
 // Initialize everything when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     // Add smooth reveal animation to page sections
@@ -279,5 +400,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 100);
     });
     
-    console.log('MTB Landing Page loaded successfully!');
+    // Initialize cookie auto-delete feature
+    setupCookieAutoDelete();
+    
+    console.log('MTB Landing Page loaded successfully with auto-delete cookies feature!');
 });
