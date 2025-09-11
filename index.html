@@ -7,6 +7,23 @@
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script>
+  (function(d,t) {
+    var BASE_URL="https://enterprise.shrobon.com";
+    var g=d.createElement(t),s=d.getElementsByTagName(t)[0];
+    g.src=BASE_URL+"/packs/js/sdk.js";
+    g.defer = true;
+    g.async = true;
+    s.parentNode.insertBefore(g,s);
+    g.onload=function(){
+      window.chatwootSDK.run({
+        websiteToken: 'wn1zHHg7DQWnJY9xT5hjoeqS',
+        baseUrl: BASE_URL
+      })
+    }
+  })(document,"script");
+</script>
+
 </head>
 <body>
     <!-- Header -->
@@ -313,4 +330,5 @@
 
 </body>
 </html>
+
 
