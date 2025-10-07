@@ -309,24 +309,51 @@
       window.chatwootSDK.run({
         websiteToken: 'wn1zHHg7DQWnJY9xT5hjoeqS',
         baseUrl: BASE_URL,
-        // Add configuration to prevent duplicates and handle errors
-        showWidget: true,
-        resetMessage: true,
-        // Add custom event listeners
-        widgetColor: '#1976d2'
+        // Critical settings to prevent duplicates
+        enablePersistence: false,
+        showWidget: true
       });
       
-      // Add error handling for message sending
-      window.addEventListener('chatwoot:ready', function () {
-        console.log('Chatwoot widget is ready');
-      });
-      
-      window.addEventListener('chatwoot:error', function (error) {
-        console.error('Chatwoot error:', error);
-        // Handle widget errors gracefully
-      });
+      // Wait for widget to be ready before setting up message interception
+      setTimeout(function() {
+        if (window.chatwootSDK && window.postMessage) {
+          setupMessageInterception();
+        }
+      }, 2000);
     }
   })(document,"script");
+
+  // Message interception to prevent duplicates
+  function setupMessageInterception() {
+    const sentMessages = new Set();
+    const messageTimeout = 5000; // 5 second window to prevent duplicates
+    
+    // Intercept postMessage calls from the widget
+    const originalPostMessage = window.postMessage;
+    window.postMessage = function(message, targetOrigin) {
+      if (typeof message === 'object' && message.type === 'message') {
+        const messageKey = message.content + '_' + Date.now();
+        
+        // Check if this message was recently sent
+        if (sentMessages.has(message.content)) {
+          console.log('Blocking duplicate message:', message.content);
+          return;
+        }
+        
+        // Add to sent messages
+        sentMessages.add(message.content);
+        
+        // Remove from set after timeout
+        setTimeout(() => {
+          sentMessages.delete(message.content);
+        }, messageTimeout);
+      }
+      
+      return originalPostMessage.call(this, message, targetOrigin);
+    };
+    
+    console.log('Message interception setup complete');
+  }
 </script>
 
 

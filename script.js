@@ -389,77 +389,157 @@ function setupCookieAutoDelete() {
 function initializeChatwootErrorHandling() {
     let messageQueue = [];
     let isProcessingMessage = false;
+    let lastMessageContent = '';
+    let lastMessageTime = 0;
     
-    // Override the default message sending behavior to prevent duplicates
+    // More aggressive duplicate prevention
+    function preventDuplicateMessages() {
+        // Monitor DOM changes in the widget
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Look for message elements with retry indicators
+                        const retryElements = node.querySelectorAll('.message-retry, [class*="retry"], [class*="failed"]');
+                        retryElements.forEach(function(retryEl) {
+                            console.log('Found retry element, attempting to remove:', retryEl);
+                            
+                            // Get the message content
+                            const messageEl = retryEl.closest('.message') || retryEl.parentElement;
+                            if (messageEl) {
+                                const messageText = messageEl.textContent || messageEl.innerText;
+                                
+                                // If this message was recently sent successfully, remove the retry indicator
+                                if (messageText.includes(lastMessageContent) && 
+                                    Date.now() - lastMessageTime < 10000) { // 10 second window
+                                    console.log('Removing duplicate message with retry indicator');
+                                    messageEl.style.display = 'none';
+                                    // Or completely remove it
+                                    // messageEl.remove();
+                                }
+                            }
+                        });
+                        
+                        // Also look for duplicate message bubbles
+                        const messageBubbles = node.querySelectorAll('.message-bubble, [class*="message"], .chat-bubble');
+                        messageBubbles.forEach(function(bubble) {
+                            const messageText = bubble.textContent || bubble.innerText;
+                            if (messageText && messageText.trim() === lastMessageContent.trim() && 
+                                Date.now() - lastMessageTime < 5000) {
+                                // Check if this is a duplicate by looking for retry indicators
+                                const hasRetryIndicator = bubble.querySelector('.retry, [class*="retry"], [class*="failed"]') ||
+                                                        bubble.classList.contains('retry') ||
+                                                        bubble.classList.contains('failed');
+                                
+                                if (hasRetryIndicator) {
+                                    console.log('Removing duplicate message bubble');
+                                    bubble.style.display = 'none';
+                                }
+                            }
+                        });
+                    }
+                });
+            });
+        });
+        
+        // Start observing the widget container
+        const startObserving = function() {
+            const widgetContainer = document.querySelector('.woot-widget-holder, #chatwoot-widget, [class*="chatwoot"]');
+            if (widgetContainer) {
+                observer.observe(widgetContainer, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class']
+                });
+                console.log('Started observing widget for duplicate messages');
+            } else {
+                // Retry if widget not found yet
+                setTimeout(startObserving, 1000);
+            }
+        };
+        
+        startObserving();
+    }
+    
+    // Override the widget's message sending mechanism
     window.addEventListener('chatwoot:ready', function() {
-        console.log('Chatwoot is ready - setting up error handling');
+        console.log('Chatwoot is ready - setting up enhanced error handling');
         
-        // Store original send function if available
-        const originalSend = window.chatwootSDK?.send;
+        // Start monitoring for duplicates
+        preventDuplicateMessages();
         
-        // Implement message deduplication
-        window.chatwootSDK.sendWithRetry = function(message, retryCount = 0) {
-            if (isProcessingMessage) {
-                console.log('Message already being processed, skipping duplicate');
-                return;
+        // Intercept iframe communication
+        const originalPostMessage = window.postMessage;
+        window.postMessage = function(data, origin) {
+            if (typeof data === 'object' && data.type === 'send-message') {
+                const currentTime = Date.now();
+                const messageContent = data.message || data.content || '';
+                
+                // Prevent sending if it's the same message within a short time window
+                if (messageContent === lastMessageContent && currentTime - lastMessageTime < 3000) {
+                    console.log('Blocking duplicate message send:', messageContent);
+                    return;
+                }
+                
+                lastMessageContent = messageContent;
+                lastMessageTime = currentTime;
+                console.log('Allowing message send:', messageContent);
             }
             
-            isProcessingMessage = true;
-            const maxRetries = 3;
-            const retryDelay = 1000; // 1 second
-            
-            // Add timestamp to message to prevent duplicates
-            const uniqueMessage = {
-                ...message,
-                timestamp: Date.now(),
-                clientId: Math.random().toString(36).substr(2, 9)
-            };
-            
-            fetch('https://enterprise.shrobon.com/api/v1/widget/messages?website_token=wn1zHHg7DQWnJY9xT5hjoeqS', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(uniqueMessage)
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('Message sent successfully:', data);
-                isProcessingMessage = false;
-            })
-            .catch(error => {
-                console.error('Error sending message:', error);
+            return originalPostMessage.call(this, data, origin);
+        };
+        
+        // Also intercept fetch requests more aggressively
+        const originalFetch = window.fetch;
+        let pendingRequests = new Map();
+        
+        window.fetch = function(url, options) {
+            if (typeof url === 'string' && url.includes('/api/v1/widget/messages')) {
+                const requestBody = options?.body;
+                const requestKey = url + '_' + requestBody;
+                const currentTime = Date.now();
                 
-                if (retryCount < maxRetries) {
-                    console.log(`Retrying message send (attempt ${retryCount + 1}/${maxRetries})`);
-                    setTimeout(() => {
-                        isProcessingMessage = false;
-                        window.chatwootSDK.sendWithRetry(message, retryCount + 1);
-                    }, retryDelay * Math.pow(2, retryCount)); // Exponential backoff
-                } else {
-                    console.error('Max retries reached, message failed to send');
-                    isProcessingMessage = false;
-                    showNotification('Message failed to send. Please try again later.', 'error');
+                // Check for duplicate requests
+                if (pendingRequests.has(requestKey)) {
+                    const lastRequestTime = pendingRequests.get(requestKey);
+                    if (currentTime - lastRequestTime < 2000) { // 2 second window
+                        console.log('Blocking duplicate API request');
+                        return Promise.resolve(new Response('{"status":"duplicate"}', {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' }
+                        }));
+                    }
                 }
-            });
+                
+                pendingRequests.set(requestKey, currentTime);
+                
+                // Clean up old entries
+                setTimeout(() => {
+                    pendingRequests.delete(requestKey);
+                }, 5000);
+                
+                console.log('Allowing API request to:', url);
+            }
+            
+            return originalFetch.apply(this, arguments);
         };
     });
     
-    // Handle network errors
+    // Handle widget errors
     window.addEventListener('chatwoot:error', function(event) {
         console.error('Chatwoot widget error:', event.detail);
         showNotification('Chat service temporarily unavailable. Please try again.', 'warning');
     });
     
-    // Prevent duplicate widget initialization
+    // Clean up on page unload
     window.addEventListener('beforeunload', function() {
         if (window.chatwootSDK) {
-            window.chatwootSDK.toggle('close');
+            try {
+                window.chatwootSDK.toggle('close');
+            } catch (e) {
+                console.log('Error closing widget:', e);
+            }
         }
     });
 }

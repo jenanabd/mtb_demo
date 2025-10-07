@@ -36,7 +36,64 @@
         // Monitor message sending
         let messageSendCount = 0;
         let lastMessageTimestamp = 0;
+        let lastMessageContent = '';
         const messageDedupeWindow = 2000; // 2 seconds
+        
+        // Auto-remove duplicate messages with retry indicators
+        function autoRemoveDuplicates() {
+            const widgetObserver = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    mutation.addedNodes.forEach(function(node) {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            // Look for messages with retry/failed indicators
+                            setTimeout(() => {
+                                const retryMessages = node.querySelectorAll('[class*="retry"], [class*="failed"], [class*="error"], .message-failed');
+                                retryMessages.forEach(function(retryEl) {
+                                    const messageEl = retryEl.closest('.message') || retryEl.parentElement;
+                                    if (messageEl) {
+                                        const messageText = messageEl.textContent || messageEl.innerText;
+                                        debugLog('🔄 Found message with retry indicator:', messageText.substring(0, 50));
+                                        
+                                        // Auto-remove after 2 seconds if it's a duplicate
+                                        setTimeout(() => {
+                                            if (messageEl.parentNode) {
+                                                debugLog('🗑️ Auto-removing duplicate message');
+                                                messageEl.style.opacity = '0';
+                                                messageEl.style.transition = 'opacity 0.3s';
+                                                setTimeout(() => {
+                                                    if (messageEl.parentNode) {
+                                                        messageEl.remove();
+                                                    }
+                                                }, 300);
+                                            }
+                                        }, 2000);
+                                    }
+                                });
+                            }, 500);
+                        }
+                    });
+                });
+            });
+            
+            // Start observing widget
+            const startWidgetObserving = function() {
+                const widgetContainer = document.querySelector('.woot-widget-holder, #chatwoot-widget, [class*="chatwoot"], iframe');
+                if (widgetContainer) {
+                    widgetObserver.observe(document.body, {
+                        childList: true,
+                        subtree: true
+                    });
+                    debugLog('🔍 Started auto-removal monitoring for duplicate messages');
+                } else {
+                    setTimeout(startWidgetObserving, 1000);
+                }
+            };
+            
+            startWidgetObserving();
+        }
+        
+        // Start auto-removal
+        autoRemoveDuplicates();
         
         // Intercept fetch requests to monitor API calls
         const originalFetch = window.fetch;
@@ -47,25 +104,55 @@
                 messageSendCount++;
                 const currentTime = Date.now();
                 
-                debugLog(`Message send attempt #${messageSendCount}`, {
+                // Extract message content from request body
+                const requestBody = args[1]?.body;
+                let messageContent = '';
+                try {
+                    if (requestBody) {
+                        const parsedBody = JSON.parse(requestBody);
+                        messageContent = parsedBody.content || parsedBody.message || '';
+                    }
+                } catch (e) {
+                    // Ignore parsing errors
+                }
+                
+                debugLog(`📤 Message send attempt #${messageSendCount}`, {
                     url: url,
                     timestamp: currentTime,
-                    timeSinceLastMessage: currentTime - lastMessageTimestamp
+                    timeSinceLastMessage: currentTime - lastMessageTimestamp,
+                    content: messageContent.substring(0, 50)
                 });
                 
                 // Check for potential duplicate
-                if (currentTime - lastMessageTimestamp < messageDedupeWindow) {
-                    debugLog('⚠️ Potential duplicate message detected!', {
+                if (messageContent === lastMessageContent && 
+                    currentTime - lastMessageTimestamp < messageDedupeWindow) {
+                    debugLog('⚠️ DUPLICATE MESSAGE DETECTED!', {
+                        content: messageContent,
                         timeDifference: currentTime - lastMessageTimestamp,
                         dedupeWindow: messageDedupeWindow
                     });
+                    
+                    // Return a fake successful response to prevent the duplicate
+                    return Promise.resolve(new Response(JSON.stringify({
+                        id: Math.random().toString(36).substr(2, 9),
+                        content: messageContent,
+                        status: 'sent',
+                        created_at: new Date().toISOString()
+                    }), {
+                        status: 200,
+                        statusText: 'OK',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    }));
                 }
                 
                 lastMessageTimestamp = currentTime;
+                lastMessageContent = messageContent;
                 
                 return originalFetch.apply(this, args)
                     .then(response => {
-                        debugLog(`Message API response: ${response.status}`, {
+                        debugLog(`📨 Message API response: ${response.status}`, {
                             status: response.status,
                             statusText: response.statusText,
                             url: response.url
@@ -73,6 +160,8 @@
                         
                         if (!response.ok) {
                             debugLog(`❌ API Error: ${response.status} ${response.statusText}`);
+                        } else {
+                            debugLog('✅ Message sent successfully');
                         }
                         
                         return response;
@@ -178,6 +267,76 @@
                 setTimeout(() => {
                     window.chatwootSDK.toggle('open');
                 }, 1000);
+            }
+        },
+        removeDuplicates: () => {
+            debugLog('🧹 Manually removing duplicate messages...');
+            
+            // Find all message elements with retry/failed indicators
+            const duplicateSelectors = [
+                '[class*="retry"]',
+                '[class*="failed"]',
+                '[class*="error"]',
+                '.message-failed',
+                '.message-retry',
+                '.chat-message-retry'
+            ];
+            
+            let removedCount = 0;
+            duplicateSelectors.forEach(selector => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                    const messageEl = el.closest('.message') || el.parentElement;
+                    if (messageEl) {
+                        debugLog('🗑️ Removing duplicate message element');
+                        messageEl.style.opacity = '0';
+                        messageEl.style.transition = 'opacity 0.3s';
+                        setTimeout(() => {
+                            if (messageEl.parentNode) {
+                                messageEl.remove();
+                                removedCount++;
+                            }
+                        }, 300);
+                    }
+                });
+            });
+            
+            // Also look for duplicate message content
+            const allMessages = document.querySelectorAll('.message, .chat-bubble, [class*="message"]');
+            const seenMessages = new Set();
+            
+            allMessages.forEach(messageEl => {
+                const messageText = (messageEl.textContent || messageEl.innerText).trim();
+                if (messageText && seenMessages.has(messageText)) {
+                    // This is a duplicate
+                    debugLog('🗑️ Removing duplicate message by content:', messageText.substring(0, 30));
+                    messageEl.style.opacity = '0';
+                    messageEl.style.transition = 'opacity 0.3s';
+                    setTimeout(() => {
+                        if (messageEl.parentNode) {
+                            messageEl.remove();
+                            removedCount++;
+                        }
+                    }, 300);
+                } else if (messageText) {
+                    seenMessages.add(messageText);
+                }
+            });
+            
+            setTimeout(() => {
+                debugLog(`✅ Cleanup complete. Removed ${removedCount} duplicate messages.`);
+            }, 1000);
+            
+            return removedCount;
+        },
+        clearChat: () => {
+            debugLog('🧹 Clearing entire chat history...');
+            const chatContainer = document.querySelector('.chat-container, .messages-container, [class*="messages"]');
+            if (chatContainer) {
+                chatContainer.innerHTML = '';
+                debugLog('✅ Chat cleared');
+            } else {
+                debugLog('❌ Chat container not found');
             }
         }
     };
