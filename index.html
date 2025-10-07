@@ -8,6 +8,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     
+    <!-- Chatwoot Debug Script (remove in production) -->
+    <script src="chatwoot-debug.js"></script>
 
 </head>
 <body>
@@ -306,8 +308,23 @@
     g.onload=function(){
       window.chatwootSDK.run({
         websiteToken: 'wn1zHHg7DQWnJY9xT5hjoeqS',
-        baseUrl: BASE_URL
-      })
+        baseUrl: BASE_URL,
+        // Add configuration to prevent duplicates and handle errors
+        showWidget: true,
+        resetMessage: true,
+        // Add custom event listeners
+        widgetColor: '#1976d2'
+      });
+      
+      // Add error handling for message sending
+      window.addEventListener('chatwoot:ready', function () {
+        console.log('Chatwoot widget is ready');
+      });
+      
+      window.addEventListener('chatwoot:error', function (error) {
+        console.error('Chatwoot error:', error);
+        // Handle widget errors gracefully
+      });
     }
   })(document,"script");
 </script>

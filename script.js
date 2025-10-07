@@ -385,6 +385,85 @@ function setupCookieAutoDelete() {
     }, 5 * 60 * 1000); // 5 minutes
 }
 
+// Chatwoot Widget Error Handling and Duplicate Prevention
+function initializeChatwootErrorHandling() {
+    let messageQueue = [];
+    let isProcessingMessage = false;
+    
+    // Override the default message sending behavior to prevent duplicates
+    window.addEventListener('chatwoot:ready', function() {
+        console.log('Chatwoot is ready - setting up error handling');
+        
+        // Store original send function if available
+        const originalSend = window.chatwootSDK?.send;
+        
+        // Implement message deduplication
+        window.chatwootSDK.sendWithRetry = function(message, retryCount = 0) {
+            if (isProcessingMessage) {
+                console.log('Message already being processed, skipping duplicate');
+                return;
+            }
+            
+            isProcessingMessage = true;
+            const maxRetries = 3;
+            const retryDelay = 1000; // 1 second
+            
+            // Add timestamp to message to prevent duplicates
+            const uniqueMessage = {
+                ...message,
+                timestamp: Date.now(),
+                clientId: Math.random().toString(36).substr(2, 9)
+            };
+            
+            fetch('https://enterprise.shrobon.com/api/v1/widget/messages?website_token=wn1zHHg7DQWnJY9xT5hjoeqS', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(uniqueMessage)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Message sent successfully:', data);
+                isProcessingMessage = false;
+            })
+            .catch(error => {
+                console.error('Error sending message:', error);
+                
+                if (retryCount < maxRetries) {
+                    console.log(`Retrying message send (attempt ${retryCount + 1}/${maxRetries})`);
+                    setTimeout(() => {
+                        isProcessingMessage = false;
+                        window.chatwootSDK.sendWithRetry(message, retryCount + 1);
+                    }, retryDelay * Math.pow(2, retryCount)); // Exponential backoff
+                } else {
+                    console.error('Max retries reached, message failed to send');
+                    isProcessingMessage = false;
+                    showNotification('Message failed to send. Please try again later.', 'error');
+                }
+            });
+        };
+    });
+    
+    // Handle network errors
+    window.addEventListener('chatwoot:error', function(event) {
+        console.error('Chatwoot widget error:', event.detail);
+        showNotification('Chat service temporarily unavailable. Please try again.', 'warning');
+    });
+    
+    // Prevent duplicate widget initialization
+    window.addEventListener('beforeunload', function() {
+        if (window.chatwootSDK) {
+            window.chatwootSDK.toggle('close');
+        }
+    });
+}
+
 // Initialize everything when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     // Add smooth reveal animation to page sections
@@ -402,6 +481,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize cookie auto-delete feature
     setupCookieAutoDelete();
+    
+    // Initialize Chatwoot error handling
+    initializeChatwootErrorHandling();
     
     console.log('MTB Landing Page loaded successfully with auto-delete cookies feature!');
 });
